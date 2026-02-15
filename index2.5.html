@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>Roleta Premium - Sem Barra Lateral</title>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@900&display=swap" rel="stylesheet">
+    <style>
+        /* --- ESTILOS GERAIS --- */
+        body, html { 
+            margin: 0; padding: 0; width: 100%; height: 100%; 
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            background: #121212; color: white; 
+            overflow: hidden; /* Impede qualquer barra de rolagem na página principal */
+            font-family: 'Montserrat', sans-serif;
+        }
+
+        /* --- CONTROLES ADMIN --- */
+        .controles-admin { transition: opacity 0.3s; opacity: 1; }
+        .hidden { display: none !important; } 
+
+        #btnAdmin { position: absolute; top: 20px; right: 20px; background: none; border: none; cursor: pointer; font-size: 24px; color: #444; z-index: 100; }
+        #btnFullscreen { 
+            position: absolute; top: 20px; left: 20px; background: #222; color: white; 
+            border: 1px solid #444; padding: 10px 20px; border-radius: 8px; cursor: pointer; 
+            font-weight: bold; z-index: 100;
+        }
+
+        /* --- MENU LATERAL (CORRIGIDO) --- */
+        #menu { 
+            position: fixed; top: 0; 
+            right: -350px; /* Escondido fora da tela */
+            width: 320px; height: 100%;
+            background: #f8f9fa; color: #333; padding: 20px; 
+            box-shadow: -10px 0 30px rgba(0,0,0,0.5);
+            transition: 0.4s ease-in-out; 
+            z-index: 101; 
+            overflow-y: auto; 
+            font-family: 'Segoe UI', sans-serif;
+            display: flex; flex-direction: column;
+            visibility: hidden; /* SOLUÇÃO: Torna o menu invisível para o navegador não criar a barra branca */
+        }
+        #menu.aberto { 
+            right: 0; 
+            visibility: visible; /* Torna visível apenas quando aberto */
+        }
+
+        #menu h3 { color: #e94560; margin-top: 0; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+
+        .item-config { 
+            background: #ffffff; border: 1px solid #ddd; border-radius: 10px;
+            padding: 15px; margin-bottom: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        }
+        .item-config label { display: block; font-size: 11px; font-weight: bold; color: #999; margin-bottom: 3px; }
+        .item-config input { 
+            width: 100%; padding: 10px; margin-bottom: 8px; 
+            border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; 
+        }
+
+        /* --- ROLETA --- */
+        .canvas-container { position: relative; width: 75vh; height: 75vh; max-width: 85vw; max-height: 85vw; }
+        #canvas { width: 100%; height: 100%; border-radius: 50%; border: 15px solid #1a1a1a; box-shadow: 0 0 60px rgba(0,0,0,0.8); }
+        #pointer { 
+            position: absolute; top: -15px; left: 50%; transform: translateX(-50%);
+            width: 0; height: 0; border-left: 25px solid transparent; 
+            border-right: 25px solid transparent; border-top: 50px solid #ff4d4d; z-index: 20;
+        }
+
+        button#btnGirar { 
+            margin-top: 30px; padding: 20px 80px; font-size: 28px; 
+            background: linear-gradient(145deg, #ff4d4d, #b30000); 
+            color: white; border: none; border-radius: 60px; cursor: pointer; font-weight: 900;
+            box-shadow: 0 10px 25px rgba(255, 77, 77, 0.4);
+        }
+        button#btnGirar:disabled { background: #333 !important; color: #666 !important; }
+        #resultado { margin-top: 25px; font-size: 40px; font-weight: 900; text-align: center; height: 50px; }
+    </style>
+</head>
+<body>
+
+<button id="btnFullscreen" class="controles-admin" onclick="toggleFullScreen()">TELA CHEIA ⛶</button>
+<button id="btnAdmin" class="controles-admin" onclick="abrirMenuComSenha()">⚙️</button>
+
+<div id="menu">
+    <h3>Painel de Controle</h3>
+    <div id="inputs"></div>
+    <button onclick="document.getElementById('menu').classList.remove('aberto')" style="width:100%; padding:15px; background:#e94560; color:white; border:none; border-radius:8px; cursor:pointer; font-weight:bold; margin-top:10px;">SALVAR E FECHAR</button>
+    <button onclick="resetarBanco()" style="width:100%; padding:10px; margin-top:20px; background:none; border:none; color:#bbb; cursor:pointer; font-size:11px;">Resetar Sistema</button>
+</div>
+
+<div class="canvas-container">
+    <div id="pointer"></div>
+    <canvas id="canvas" width="800" height="800"></canvas>
+</div>
+
+<button id="btnGirar" onclick="girar()">GIRAR</button>
+<div id="resultado"></div>
+
+<script>
+    const FIREBASE_URL = "https://roleta-d3003-default-rtdb.firebaseio.com"; 
+    const SENHA_ADMIN = "1234"; 
+
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    let estoque = [];
+    let anguloAtual = 0;
+    let isSpinning = false;
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const cores = ["#12CBC4", "#FFC312", "#EE5A24", "#06b6d4", "#f43f5e", "#A3CB38", "#FDA7DF", "#ED4C67"];
+
+    // Monitor de Fullscreen
+    document.addEventListener('fullscreenchange', () => {
+        const botoes = document.querySelectorAll('.controles-admin');
+        if (document.fullscreenElement) {
+            botoes.forEach(b => b.classList.add('hidden'));
+        } else {
+            botoes.forEach(b => b.classList.remove('hidden'));
+        }
+    });
+
+    function toggleFullScreen() {
+        if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+        else document.exitFullscreen();
+    }
+
+    function abrirMenuComSenha() {
+        if (isSpinning) return;
+        const tentativa = prompt("Senha administrativa:");
+        if (tentativa === SENHA_ADMIN) {
+            document.getElementById('menu').classList.add('aberto');
+        } else if (tentativa !== null) {
+            alert("Senha incorreta!");
+        }
+    }
+
+    async function sincronizarComNuvem() {
+        if (isSpinning) return;
+        try {
+            const res = await fetch(`${FIREBASE_URL}/roleta_final.json`);
+            const data = await res.json();
+            if (data) {
+                estoque = data;
+                desenhar();
+                renderizarMenu();
+                validarEstoque();
+            } else {
+                inicializarPadrao();
+            }
+        } catch (e) { console.error(e); }
+    }
+
+    async function salvarNaNuvem() {
+        await fetch(`${FIREBASE_URL}/roleta_final.json`, {
+            method: 'PUT',
+            body: JSON.stringify(estoque)
+        });
+        validarEstoque();
+    }
+
+    function inicializarPadrao() {
+        estoque = [];
+        for (let i = 0; i < 8; i++) estoque.push({ nome: `DOCE ${i+1}`, qtd: 10, cor: cores[i] });
+        salvarNaNuvem();
+    }
+
+    function tocarSomClique(vol) {
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        const buffer = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.05, audioCtx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+        const noise = audioCtx.createBufferSource();
+        noise.buffer = buffer;
+        const gain = audioCtx.createGain();
+        gain.gain.setValueAtTime(0.5 * vol, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.04);
+        noise.connect(gain); gain.connect(audioCtx.destination);
+        noise.start();
+    }
+
+    function desenhar() {
+        const fatia = (Math.PI * 2) / 8;
+        ctx.clearRect(0, 0, 800, 800);
+        estoque.forEach((item, i) => {
+            const anguloFatia = i * fatia;
+            ctx.save();
+            ctx.beginPath(); ctx.moveTo(400, 400);
+            ctx.arc(400, 400, 380, anguloFatia, anguloFatia + fatia);
+            ctx.fillStyle = item.cor; ctx.fill();
+            ctx.translate(400, 400);
+            ctx.rotate(anguloFatia + fatia / 2);
+            ctx.textAlign = "right";
+            ctx.fillStyle = "white"; 
+            ctx.font = "900 30px 'Montserrat'";
+            ctx.fillText(item.nome.toUpperCase(), 350, 10);
+            ctx.restore();
+        });
+        ctx.beginPath(); ctx.arc(400, 400, 20, 0, Math.PI * 2); ctx.fillStyle = "#1a1a1a"; ctx.fill();
+    }
+
+    function girar() {
+        const totalDisp = estoque.reduce((a, b) => a + (b.qtd > 0 ? b.qtd : 0), 0);
+        if (totalDisp <= 0 || isSpinning) return;
+        
+        isSpinning = true;
+        document.getElementById('btnGirar').disabled = true;
+        document.getElementById('resultado').innerText = "SORTEANDO...";
+
+        let r = Math.random() * totalDisp, ac = 0, idx = -1;
+        for (let i = 0; i < 8; i++) {
+            if (estoque[i].qtd > 0) {
+                ac += estoque[i].qtd;
+                if (r <= ac) { idx = i; break; }
+            }
+        }
+
+        const voltas = 360 * 10; 
+        const alvo = (idx * 45) + 22.5;
+        const totalGiro = (270 - alvo - (anguloAtual % 360) + 360) % 360 + voltas;
+        const duracao = 5000, startTime = performance.now(), anguloInicial = anguloAtual;
+        let ultimoSomIdx = 0;
+
+        function frame(now) {
+            let prog = (now - startTime) / duracao;
+            if (prog > 1) prog = 1;
+            anguloAtual = anguloInicial + ((1 - Math.pow(1 - prog, 4)) * totalGiro);
+            canvas.style.transform = `rotate(${anguloAtual}deg)`;
+            let checkSom = Math.floor((anguloAtual + 22.5) / 45);
+            if (checkSom !== ultimoSomIdx) { tocarSomClique(1 - prog); ultimoSomIdx = checkSom; }
+            if (prog < 1) requestAnimationFrame(frame);
+            else {
+                isSpinning = false;
+                estoque[idx].qtd--;
+                salvarNaNuvem();
+                document.getElementById('resultado').innerHTML = `GANHOU: <span style="color:${estoque[idx].cor}">${estoque[idx].nome}</span>`;
+                validarEstoque();
+            }
+        }
+        requestAnimationFrame(frame);
+    }
+
+    function renderizarMenu() {
+        const div = document.getElementById('inputs');
+        div.innerHTML = ""; 
+        estoque.forEach((item, i) => {
+            const card = document.createElement('div');
+            card.className = 'item-config';
+            card.innerHTML = `
+                <strong style="color:${item.cor}">POSIÇÃO ${i+1}</strong>
+                <div style="margin-top:8px;">
+                    <label>NOME</label>
+                    <input type="text" value="${item.nome}" onchange="estoque[${i}].nome=this.value.toUpperCase();salvarNaNuvem();desenhar()">
+                    <label>QTD ESTOQUE</label>
+                    <input type="number" value="${item.qtd}" onchange="estoque[${i}].qtd=parseInt(this.value);salvarNaNuvem();renderizarMenu()">
+                </div>
+            `;
+            div.appendChild(card);
+        });
+    }
+
+    function validarEstoque() {
+        const total = estoque.reduce((acc, item) => acc + (item.qtd > 0 ? item.qtd : 0), 0);
+        const btn = document.getElementById('btnGirar');
+        if (total <= 0) { btn.disabled = true; btn.innerText = "ESGOTADO"; }
+        else if (!isSpinning) { btn.disabled = false; btn.innerText = "GIRAR"; }
+    }
+
+    function resetarBanco() { if(confirm("Zerar tudo?")) { inicializarPadrao(); location.reload(); } }
+
+    setInterval(sincronizarComNuvem, 5000);
+    sincronizarComNuvem();
+</script>
+</body>
+</html>
